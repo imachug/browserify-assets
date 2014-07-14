@@ -3,10 +3,12 @@ var through = require('through');
 var async = require('async');
 var browserify = require('browserify');
 
-module.exports = browserifyIncremental;
-browserifyIncremental.browserify = browserify;
+var util = require('util')
 
-function browserifyIncremental(files, opts) {
+module.exports = browserifyAssets;
+browserifyAssets.browserify = browserify;
+
+function browserifyAssets(files, opts) {
     var b;
     if (!opts) {
         opts = files || {};
@@ -16,23 +18,14 @@ function browserifyIncremental(files, opts) {
         b = typeof files.bundle === 'function' ? files : browserify(files, opts);
     }
     var cacheFile = opts.cacheFile || opts.cachefile;
-    var cache = {};
-    var pkgcache = {};
-    var mtimes = {};
+    var pkgcache;
+    var cache;
+    var mtimes;
+    var packages = {};
+    var filesPackages = {};
+    var packagesRequired = {};
     var first = true;
 
-    if (cacheFile) {
-      try {
-        var incrementalCache = JSON.parse(fs.readFileSync(cacheFile, {encoding: 'utf8'}));
-        cache = incrementalCache.cache;
-        mtimes = incrementalCache.mtimes;
-        first = false;
-      } catch (err) {
-        // no existing cache file
-        b.emit('_cacheFileReadError', err);
-      }
-    }
-    
     if (opts.cache) {
         cache = opts.cache;
         delete opts.cache;
@@ -48,17 +41,44 @@ function browserifyIncremental(files, opts) {
         mtimes = opts.mtimes;
         delete opts.mtimes;
     }
+
+    if (false && cacheFile && !cache) {
+      try {
+        var incCache = JSON.parse(fs.readFileSync(cacheFile, {encoding: 'utf8'}));
+        cache = incCache.cache;
+        mtimes = incCache.mtimes;
+        packages = incCache.packages;
+        filesPackages = incCache.filesPackages;
+        pkgcache = {};
+
+        first = false;
+      } catch (err) {
+        // no existing cache file
+        b.emit('_cacheFileReadError', err);
+      }
+    }
+
+    cache = cache || {};
+    mtimes = mtimes || {};
+    pkgcache = pkgcache || {};
     
     b.on('package', function (file, pkg) {
+        var pkgpath = pkg.__dirname;
+        console.log('package', pkgpath, file)
         pkgcache[file] = pkg;
+        packages[pkgpath] || (packages[pkgpath] = pkg);
+        filesPackages[pkgpath] || (filesPackages[pkgpath] = file);
     });
     
     b.on('dep', function (dep) {
+        console.log('dep', dep.id)
         cache[dep.id] = dep;
         if (!mtimes[dep.id]) updateMtime(mtimes, dep.id);
     });
     
     b.on('file', function (file) {
+        console.log('file', file)
+        packagesRequired[]
     });
 
     b.on('bundle', function (bundle) {
@@ -82,6 +102,8 @@ function browserifyIncremental(files, opts) {
         if (!first) opts_.cache = cache;
         opts_.includePackage = true;
         opts_.packageCache = pkgcache;
+
+        packagesRequired = {}; // reset
 
         opts_.deps = function(depsOpts) {
           var d = through();
@@ -145,4 +167,8 @@ function invalidateModifiedFiles(mtimes, cache, done) {
   }, function(err, invalidated) {
     done(null, invalidated)
   });
+}
+
+function invalidateModifiedPackages(mtimes, pkgcache, done) {
+
 }

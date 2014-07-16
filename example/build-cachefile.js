@@ -26,6 +26,9 @@ run() // start test
 
 function run() {
   console.time('bundle')
+  b.on('assetStream', function(assetStream) {
+    assetStream.pipe(fs.createWriteStream(__dirname+'/output/bundle.css'))
+  })
   b.bundle()
     .on('end', function(){ console.timeEnd('bundle') })
     .pipe(fs.createWriteStream(__dirname+'/output/bundle.js'))

@@ -14,6 +14,8 @@
   "dependencies": {
     "browserify": "4.x",
     "through": "^2.3.4",
-    "async": "^0.9.0"
+    "async": "^0.9.0",
+    "concat-stream": "^1.4.6",
+    "glob": "^4.0.4"
   }
 }

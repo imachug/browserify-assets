@@ -18,11 +18,11 @@ var COMPLETE = 'COMPLETE';
 function browserifyAssets(files, opts) {
     var b;
     if (!opts) {
-        opts = files || {};
-        files = undefined;
-        b = typeof opts.bundle === 'function' ? opts : browserify(opts);
+      opts = files || {};
+      files = undefined;
+      b = typeof opts.bundle === 'function' ? opts : browserify(opts);
     } else {
-        b = typeof files.bundle === 'function' ? files : browserify(files, opts);
+      b = typeof files.bundle === 'function' ? files : browserify(files, opts);
     }
     var cacheFile = opts.cacheFile || opts.cachefile;
 
@@ -32,98 +32,98 @@ function browserifyAssets(files, opts) {
     var bundle = b.bundle.bind(b);
     
     b.bundle = function (opts_, cb) {
-        if (b._pending) return bundle(opts_, cb);
-        
-        if (typeof opts_ === 'function') {
-            cb = opts_;
-            opts_ = {};
-        }
-        if (!opts_) opts_ = {};
+      if (b._pending) return bundle(opts_, cb);
+      
+      if (typeof opts_ === 'function') {
+        cb = opts_;
+        opts_ = {};
+      }
+      if (!opts_) opts_ = {};
 
+      var co = getCacheObjects(b);
+
+      var packagesAssetsBuilds = {};
+      var bundleComplete = false;
+
+      opts_.cache = getModuleCache(b);
+      opts_.packageCache = getPackageCache(b);
+      var assetStream = through();
+
+      b.emit('assetStream', assetStream);
+
+      function cleanupWhenAssetBundleComplete() {
+        if (bundleComplete && areAllPackagesAssetsComplete(packagesAssetsBuilds)) {
+          assetStream.end();
+
+          b.removeListener('cacheObjectsPackage', buildAssetsForPackage);
+          b.removeListener('file', buildAssetsForFile);
+        }
+      }
+
+      function assetComplete(err, pkgpath) {
+        if (err) assetStream.emit('error', err, pkgpath);
+        packagesAssetsBuilds[pkgpath] = COMPLETE;
+
+        cleanupWhenAssetBundleComplete();
+      }
+
+      function buildAssetsForFile(file) {
+        guard(file, 'file');
         var co = getCacheObjects(b);
+        var pkgpath = co.filesPackagePaths[file];
+        if (pkgpath) buildAssetsForPackage(pkgpath);
+        // else console.warn('waiting for',file)
+      }
 
-        var packagesAssetsBuilds = {};
-        var bundleComplete = false;
+      function buildAssetsForPackage(pkgpath) {
+        guard(pkgpath, 'pkgpath');
+        var co = getCacheObjects(b);
+        var status = packagesAssetsBuilds[pkgpath];
+        if (status && status !== PENDING) return;
 
-        opts_.cache = getModuleCache(b);
-        opts_.packageCache = getPackageCache(b);
-        var assetStream = through();
+        packagesAssetsBuilds[pkgpath] = STARTED;
 
-        b.emit('assetStream', assetStream);
+        buildPackageAssetsAndWriteToStream(co.packages[pkgpath], assetStream, function(err) {
+          assetComplete(err, pkgpath);
+        });
+      }
 
-        function cleanupWhenAssetBundleComplete() {
-          if (bundleComplete && areAllPackagesAssetsComplete(packagesAssetsBuilds)) {
-            assetStream.end();
+      b.on('cacheObjectsPackage', buildAssetsForPackage);
+      b.on('file', buildAssetsForFile);
 
-            b.removeListener('cacheObjectsPackage', buildAssetsForPackage);
-            b.removeListener('file', buildAssetsForFile);
-          }
-        }
-
-        function assetComplete(err, pkgpath) {
-          if (err) assetStream.emit('error', err, pkgpath);
-          packagesAssetsBuilds[pkgpath] = COMPLETE;
-
-          cleanupWhenAssetBundleComplete();
-        }
-
-        function buildAssetsForFile(file) {
-          guard(file, 'file');
-          var co = getCacheObjects(b);
-          var pkgpath = co.filesPackagePaths[file];
-          if (pkgpath) buildAssetsForPackage(pkgpath);
-          // else console.warn('waiting for',file)
-        }
-
-        function buildAssetsForPackage(pkgpath) {
-          guard(pkgpath, 'pkgpath');
-          var co = getCacheObjects(b);
-          var status = packagesAssetsBuilds[pkgpath];
-          if (status && status !== PENDING) return;
-
-          packagesAssetsBuilds[pkgpath] = STARTED;
-
-          buildPackageAssetsAndWriteToStream(co.packages[pkgpath], assetStream, function(err) {
-            assetComplete(err, pkgpath);
-          });
-        }
-
-        b.on('cacheObjectsPackage', buildAssetsForPackage);
-        b.on('file', buildAssetsForFile);
-
-        opts_.deps = function(depsOpts) {
-          var co = getCacheObjects(b);
-          var modules = co.modules;
-          var mtimes = co.mtimes;
-          var depsStream = through();
-          invalidateCache(mtimes, modules, function(err, invalidated) {
-            // console.log('cachesize', Object.keys(cache).length)
-            depsOpts.cache = modules;
-            b.emit('update', invalidated);
-            b.deps(depsOpts).pipe(depsStream);
-          });
-          return depsStream;
-        }
-        var outStream = bundle(opts_, cb);
+      opts_.deps = function(depsOpts) {
+        var co = getCacheObjects(b);
+        var modules = co.modules;
+        var mtimes = co.mtimes;
+        var depsStream = through();
+        invalidateCache(mtimes, modules, function(err, invalidated) {
+          // console.log('cachesize', Object.keys(cache).length)
+          depsOpts.cache = modules;
+          b.emit('update', invalidated);
+          b.deps(depsOpts).pipe(depsStream);
+        });
+        return depsStream;
+      }
+      var outStream = bundle(opts_, cb);
+      
+      var start = Date.now();
+      var bytes = 0;
+      outStream.pipe(through(function (buf) { bytes += buf.length }));
+      outStream.on('end', end);
+      
+      function end () {
+        // no more packages to be required
+        bundleComplete = true;
+        cleanupWhenAssetBundleComplete();
         
-        var start = Date.now();
-        var bytes = 0;
-        outStream.pipe(through(function (buf) { bytes += buf.length }));
-        outStream.on('end', end);
-        
-        function end () {
-            // no more packages to be required
-            bundleComplete = true;
-            cleanupWhenAssetBundleComplete();
-            
-            var delta = ((Date.now() - start) / 1000).toFixed(2);
-            b.emit('log', bytes + ' bytes written (' + delta + ' seconds)');
-            b.emit('time', Date.now() - start);
-            b.emit('bytes', bytes);
+        var delta = ((Date.now() - start) / 1000).toFixed(2);
+        b.emit('log', bytes + ' bytes written (' + delta + ' seconds)');
+        b.emit('time', Date.now() - start);
+        b.emit('bytes', bytes);
 
-            storeCacheObjects(b, cacheFile);
-        }
-        return outStream;
+        storeCacheObjects(b, cacheFile);
+      }
+      return outStream;
     };
     
     return b;
@@ -136,7 +136,7 @@ function buildPackageAssetsAndWriteToStream(pkg, assetStream, packageDone) {
   
   if (!pkg.__dirname) packageDone();
   
-  var transformStreamForFile = transformStreamFactoryFor(pkg.transforms || [])
+  var transformStreamForFile = streamFactoryForTransforms(pkg.transforms || [])
 
   var assetGlobs = [].concat(pkg.style || []);
   async.each(assetGlobs, function(assetGlob, assetGlobDone) {
@@ -161,7 +161,7 @@ function streamAccumlator(outputStream, done) {
   });
 }
 
-function transformStreamFactoryFor(transforms) {
+function streamFactoryForTransforms(transforms) {
   guard(transforms, 'transforms');
   return function(file) {
     guard(file, 'file');

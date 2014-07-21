@@ -1,6 +1,6 @@
 console.time('total')
 console.time('startup')
-var browserifyIncremental = require('../');
+var browserifyAssets = require('../');
 var fs = require('fs');
 
 console.timeEnd('startup')
@@ -14,7 +14,7 @@ if (cache) {
 } else {
   var opts = {}
 }
-var b = browserifyIncremental(opts)
+var b = browserifyAssets(opts)
 console.timeEnd('cache fill')
 b.on('log', function(msg){ console.log(msg) })
 b.on('update', function(updated) { console.log('changed files\n'+updated.join('\n')) })
@@ -27,7 +27,11 @@ run() // start test
 function run() {
   console.time('bundle')
   b.on('assetStream', function(assetStream) {
+    console.time('assetStream')
     assetStream.pipe(fs.createWriteStream(__dirname+'/output/bundle.css'))
+    assetStream.on('end', function(){ 
+      console.timeEnd('assetStream') 
+    })
   })
   b.bundle()
     .on('end', function(){ console.timeEnd('bundle') })

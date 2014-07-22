@@ -2,11 +2,14 @@ var fs = require('fs');
 var path = require('path');
 var util = require('util');
 var assert = require('assert');
+
 var through = require('through');
 var async = require('async');
 var browserify = require('browserify');
 var concatStream = require('concat-stream');
 var glob = require('glob');
+var combineStreams = require('stream-combiner');
+var browserifyCache = require('browserify-cache-api');
 
 module.exports = browserifyAssets;
 browserifyAssets.browserify = browserify;
@@ -24,11 +27,9 @@ function browserifyAssets(files, opts) {
     } else {
       b = typeof files.bundle === 'function' ? files : browserify(files, opts);
     }
-    var cacheFile = opts.cacheFile || opts.cachefile;
 
-    loadCacheObjects(b, cacheFile);
-    attachCacheObjectHandlers(b);
-    
+    browserifyCache(b, opts);
+
     var bundle = b.bundle.bind(b);
     
     b.bundle = function (opts_, cb) {
@@ -40,13 +41,9 @@ function browserifyAssets(files, opts) {
       }
       if (!opts_) opts_ = {};
 
-      var co = getCacheObjects(b);
-
       var packagesAssetsBuilds = {};
       var bundleComplete = false;
 
-      opts_.cache = getModuleCache(b);
-      opts_.packageCache = getPackageCache(b);
       var assetStream = through();
 
       b.emit('assetStream', assetStream);
@@ -69,7 +66,7 @@ function browserifyAssets(files, opts) {
 
       function buildAssetsForFile(file) {
         guard(file, 'file');
-        var co = getCacheObjects(b);
+        var co = browserifyCache.getCacheObjects(b);
         var pkgpath = co.filesPackagePaths[file];
         if (pkgpath) buildAssetsForPackage(pkgpath);
         // else console.warn('waiting for',file)
@@ -77,7 +74,7 @@ function browserifyAssets(files, opts) {
 
       function buildAssetsForPackage(pkgpath) {
         guard(pkgpath, 'pkgpath');
-        var co = getCacheObjects(b);
+        var co = browserifyCache.getCacheObjects(b);
         var status = packagesAssetsBuilds[pkgpath];
         if (status && status !== PENDING) return;
 
@@ -91,19 +88,6 @@ function browserifyAssets(files, opts) {
       b.on('cacheObjectsPackage', buildAssetsForPackage);
       b.on('file', buildAssetsForFile);
 
-      opts_.deps = function(depsOpts) {
-        var co = getCacheObjects(b);
-        var modules = co.modules;
-        var mtimes = co.mtimes;
-        var depsStream = through();
-        invalidateCache(mtimes, modules, function(err, invalidated) {
-          // console.log('cachesize', Object.keys(cache).length)
-          depsOpts.cache = modules;
-          b.emit('update', invalidated);
-          b.deps(depsOpts).pipe(depsStream);
-        });
-        return depsStream;
-      }
       var outStream = bundle(opts_, cb);
       
       var start = Date.now();
@@ -121,7 +105,6 @@ function browserifyAssets(files, opts) {
         b.emit('time', Date.now() - start);
         b.emit('bytes', bytes);
 
-        storeCacheObjects(b, cacheFile);
       }
       return outStream;
     };
@@ -134,9 +117,13 @@ function browserifyAssets(files, opts) {
 function buildPackageAssetsAndWriteToStream(pkg, assetStream, packageDone) {
   guard(pkg, 'pkg'), guard(assetStream, 'assetStream'), guard(packageDone, 'packageDone');
   
-  if (!pkg.__dirname) packageDone();
+  if (!pkg.__dirname) return packageDone();
   
-  var transformStreamForFile = streamFactoryForTransforms(pkg.transforms || [])
+  try {
+    var transformStreamForFile = streamFactoryForPackage(pkg);
+  } catch (err) {
+    return packageDone(err);
+  }
 
   var assetGlobs = [].concat(pkg.style || []);
   async.each(assetGlobs, function(assetGlob, assetGlobDone) {
@@ -161,15 +148,35 @@ function streamAccumlator(outputStream, done) {
   });
 }
 
-function streamFactoryForTransforms(transforms) {
-  guard(transforms, 'transforms');
+function streamFactoryForPackage(pkg) {
+  guard(pkg, 'pkg');
+  var transforms = (pkg.transforms || []).map(function(tr){
+    return findTransform(tr, pkg); 
+  });
+  
   return function(file) {
     guard(file, 'file');
-    var inputStream = through();
-    return transforms.reduce(function(lastStream, transform) {
-      return lastStream.pipe(require(transform)(file));
-    }, inputStream);
+    return combineStreams(transforms.map(function(transform) {
+      return transform(file)
+    }));
   };
+}
+
+function findTransform(transform, pkg) {
+  if (typeof transform === 'function') return transform;
+
+  try {
+    return require(transform)
+  } catch (err) {
+    try {
+      var rebasedPath
+      if (isLocalPath(transform)) rebasedPath = path.resolve(pkg.__dirname, transform)
+      else rebasedPath = path.join(pkg.__dirname, 'node_modules', transform)
+      return require(rebasedPath)
+    } catch (err) {
+      throw new Error("couldn't resolve transform "+transform+" while processing package "+pkg.__dirname)
+    }
+  }
 }
 
 function areAllPackagesAssetsComplete(packagesAssetsBuilds) {
@@ -177,117 +184,6 @@ function areAllPackagesAssetsComplete(packagesAssetsBuilds) {
     return status !== COMPLETE
   }).length;
   return numPending === 0;
-}
-
-// caching
-
-function getCacheObjects(b) {
-  guard(b, 'browserify instance');
-  return b.incCacheObjects;
-}
-
-function setCacheObjects(b, cacheObjects) {
-  guard(b, 'browserify instance'), guard(cacheObjects, 'cacheObjects');
-  b.incCacheObjects = cacheObjects;
-}
-
-function getModuleCache(b) {
-  guard(b, 'browserify instance');
-  var co = getCacheObjects(b);
-  if (!Object.keys(co.modules).length) {
-    return co.modules;
-  }
-}
-
-function getPackageCache(b) {
-  guard(b, 'browserify instance');
-  var co = getCacheObjects(b);
-  // rebuild packageCache from packages
-  return Object.keys(co.filesPackagePaths).reduce(function(packageCache, file) {
-    packageCache[file] = co.packages[co.filesPackagePaths[file]];
-    return packageCache;
-  }, {});
-}
-
-function attachCacheObjectHandlers(b) {
-  guard(b, 'browserify instance');
-  b.on('dep', function (dep) {
-    var co = getCacheObjects(b);
-    co.modules[dep.id] = dep;
-    if (!co.mtimes[dep.id]) updateMtime(co.mtimes, dep.id);
-  });
-
-  b.on('package', function (file, pkg) {
-    var co = getCacheObjects(b);
-
-    var pkgpath = pkg.__dirname;
-    // console.log('package', pkgpath, file);
-
-    if (pkgpath) {
-      co.packages[pkgpath] || (co.packages[pkgpath] = pkg);
-      co.filesPackagePaths[file] || (co.filesPackagePaths[file] = pkgpath);
-      b.emit('cacheObjectsPackage', pkgpath, pkg)
-    }
-  });
-}
-
-function storeCacheObjects(b, cacheFile) {
-  guard(b, 'browserify instance');
-  if (cacheFile) {
-    var co = getCacheObjects(b);
-    fs.writeFile(cacheFile, JSON.stringify(co), {encoding: 'utf8'}, function(err) {
-      if (err) b.emit('_cacheFileWriteError', err);
-      else b.emit('_cacheFileWritten', cacheFile);
-    });
-  }
-}
-
-function loadCacheObjects(b, cacheFile) {
-  guard(b, 'browserify instance');
-  var co;  
-  if (cacheFile && !getCacheObjects(b)) {
-    try {
-      co = JSON.parse(fs.readFileSync(cacheFile, {encoding: 'utf8'}));
-    } catch (err) {
-      // no existing cache file
-      b.emit('_cacheFileReadError', err);
-    }
-  }
-  co = co || {};
-  co.modules = co.modules || {};
-  co.packages = co.packages || {};
-  co.mtimes = co.mtimes || {};
-  co.filesPackagePaths = co.filesPackagePaths || {};
-  setCacheObjects(b, co);
-}
-
-function updateMtime(mtimes, file) {
-  fs.stat(file, function (err, stat) {
-    if (!err) mtimes[file] = stat.mtime.getTime();
-  });
-}
-
-function invalidateCache(mtimes, cache, done) {
-  invalidateModifiedFiles(mtimes, Object.keys(cache), function(file) {
-    delete cache[file];
-  }, done)
-}
-
-function invalidateModifiedFiles(mtimes, files, invalidate, done) {
-  async.reduce(files, [], function(invalidated, file, fileDone) {
-    fs.stat(file, function (err, stat) {
-      if (err) return fileDone();
-      var mtimeNew = stat.mtime.getTime();
-      if(!(mtimes[file] && mtimeNew && mtimeNew <= mtimes[file])) {
-        invalidate(file);
-        invalidated.push(file);
-      }
-      mtimes[file] = mtimeNew;
-      fileDone(null, invalidated);
-    });
-  }, function(err, invalidated) {
-    done(null, invalidated);
-  });
 }
 
 // util
@@ -298,4 +194,9 @@ function values(obj) {
 
 function guard(value, name) {
   assert(value, 'missing '+name);
+}
+
+function isLocalPath(filepath) {
+  var charAt0 = filepath.charAt(0)
+  return charAt0 === '.' || charAt0 === '/'
 }

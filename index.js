@@ -32,7 +32,7 @@ function browserifyAssets(files, opts) {
 
   browserifyCache(b, opts);
 
-  // override the .bundle() method
+  // override browserify bundle() method
   var bundle = b.bundle.bind(b);
   b.bundle = function (opts_, cb) {
     // more browserify plugin boilerplate
@@ -44,11 +44,12 @@ function browserifyAssets(files, opts) {
     }
     if (!opts_) opts_ = {};
 
+    // asset build progress
     var packagesAssetsBuilds = {};
     var bundleComplete = false;
 
+    // provide asset bundle stream to api consumers
     var assetStream = through();
-
     b.emit('assetStream', assetStream);
 
     function cleanupWhenAssetBundleComplete() {

@@ -19,106 +19,109 @@ var STARTED = 'STARTED';
 var COMPLETE = 'COMPLETE';
 
 function browserifyAssets(files, opts) {
-    var b;
-    if (!opts) {
-      opts = files || {};
-      files = undefined;
-      b = typeof opts.bundle === 'function' ? opts : browserify(opts);
-    } else {
-      b = typeof files.bundle === 'function' ? files : browserify(files, opts);
+  // browserify plugin boilerplate
+  // normalises variable arguments
+  var b;
+  if (!opts) {
+    opts = files || {};
+    files = undefined;
+    b = typeof opts.bundle === 'function' ? opts : browserify(opts);
+  } else {
+    b = typeof files.bundle === 'function' ? files : browserify(files, opts);
+  }
+
+  browserifyCache(b, opts);
+
+  // override the .bundle() method
+  var bundle = b.bundle.bind(b);
+  b.bundle = function (opts_, cb) {
+    // more browserify plugin boilerplate
+    if (b._pending) return bundle(opts_, cb);
+
+    if (typeof opts_ === 'function') {
+      cb = opts_;
+      opts_ = {};
+    }
+    if (!opts_) opts_ = {};
+
+    var packagesAssetsBuilds = {};
+    var bundleComplete = false;
+
+    var assetStream = through();
+
+    b.emit('assetStream', assetStream);
+
+    function cleanupWhenAssetBundleComplete() {
+      if (bundleComplete && areAllPackagesAssetsComplete(packagesAssetsBuilds)) {
+        assetStream.end();
+
+        b.removeListener('cacheObjectsPackage', buildAssetsForPackage);
+        b.removeListener('file', buildAssetsForFile);
+      }
     }
 
-    browserifyCache(b, opts);
+    function assetComplete(err, pkgpath) {
+      if (err) assetStream.emit('error', err, pkgpath);
+      packagesAssetsBuilds[pkgpath] = COMPLETE;
 
-    var bundle = b.bundle.bind(b);
-    
-    b.bundle = function (opts_, cb) {
-      if (b._pending) return bundle(opts_, cb);
-      
-      if (typeof opts_ === 'function') {
-        cb = opts_;
-        opts_ = {};
-      }
-      if (!opts_) opts_ = {};
+      cleanupWhenAssetBundleComplete();
+    }
 
-      var packagesAssetsBuilds = {};
-      var bundleComplete = false;
+    function buildAssetsForFile(file) {
+      guard(file, 'file');
+      var co = browserifyCache.getCacheObjects(b);
+      var pkgpath = co.filesPackagePaths[file];
+      if (pkgpath) buildAssetsForPackage(pkgpath);
+      // else console.warn('waiting for',file)
+    }
 
-      var assetStream = through();
+    function buildAssetsForPackage(pkgpath) {
+      guard(pkgpath, 'pkgpath');
+      var co = browserifyCache.getCacheObjects(b);
+      var status = packagesAssetsBuilds[pkgpath];
+      if (status && status !== PENDING) return;
 
-      b.emit('assetStream', assetStream);
+      packagesAssetsBuilds[pkgpath] = STARTED;
 
-      function cleanupWhenAssetBundleComplete() {
-        if (bundleComplete && areAllPackagesAssetsComplete(packagesAssetsBuilds)) {
-          assetStream.end();
+      buildPackageAssetsAndWriteToStream(co.packages[pkgpath], assetStream, function(err) {
+        assetComplete(err, pkgpath);
+      });
+    }
 
-          b.removeListener('cacheObjectsPackage', buildAssetsForPackage);
-          b.removeListener('file', buildAssetsForFile);
-        }
-      }
+    b.on('cacheObjectsPackage', buildAssetsForPackage);
+    b.on('file', buildAssetsForFile);
 
-      function assetComplete(err, pkgpath) {
-        if (err) assetStream.emit('error', err, pkgpath);
-        packagesAssetsBuilds[pkgpath] = COMPLETE;
+    var outStream = bundle(opts_, cb);
 
-        cleanupWhenAssetBundleComplete();
-      }
+    var start = Date.now();
+    var bytes = 0;
+    outStream.pipe(through(function (buf) { bytes += buf.length }));
+    outStream.on('end', end);
 
-      function buildAssetsForFile(file) {
-        guard(file, 'file');
-        var co = browserifyCache.getCacheObjects(b);
-        var pkgpath = co.filesPackagePaths[file];
-        if (pkgpath) buildAssetsForPackage(pkgpath);
-        // else console.warn('waiting for',file)
-      }
+    function end () {
+      // no more packages to be required
+      bundleComplete = true;
+      cleanupWhenAssetBundleComplete();
 
-      function buildAssetsForPackage(pkgpath) {
-        guard(pkgpath, 'pkgpath');
-        var co = browserifyCache.getCacheObjects(b);
-        var status = packagesAssetsBuilds[pkgpath];
-        if (status && status !== PENDING) return;
+      var delta = ((Date.now() - start) / 1000).toFixed(2);
+      b.emit('log', bytes + ' bytes written (' + delta + ' seconds)');
+      b.emit('time', Date.now() - start);
+      b.emit('bytes', bytes);
 
-        packagesAssetsBuilds[pkgpath] = STARTED;
+    }
+    return outStream;
+  };
 
-        buildPackageAssetsAndWriteToStream(co.packages[pkgpath], assetStream, function(err) {
-          assetComplete(err, pkgpath);
-        });
-      }
-
-      b.on('cacheObjectsPackage', buildAssetsForPackage);
-      b.on('file', buildAssetsForFile);
-
-      var outStream = bundle(opts_, cb);
-      
-      var start = Date.now();
-      var bytes = 0;
-      outStream.pipe(through(function (buf) { bytes += buf.length }));
-      outStream.on('end', end);
-      
-      function end () {
-        // no more packages to be required
-        bundleComplete = true;
-        cleanupWhenAssetBundleComplete();
-        
-        var delta = ((Date.now() - start) / 1000).toFixed(2);
-        b.emit('log', bytes + ' bytes written (' + delta + ' seconds)');
-        b.emit('time', Date.now() - start);
-        b.emit('bytes', bytes);
-
-      }
-      return outStream;
-    };
-    
-    return b;
+  return b;
 }
 
 // asset building
 
 function buildPackageAssetsAndWriteToStream(pkg, assetStream, packageDone) {
   guard(pkg, 'pkg'), guard(assetStream, 'assetStream'), guard(packageDone, 'packageDone');
-  
+
   if (!pkg.__dirname) return packageDone();
-  
+
   try {
     var transformStreamForFile = streamFactoryForPackage(pkg);
   } catch (err) {
@@ -151,9 +154,9 @@ function streamAccumlator(outputStream, done) {
 function streamFactoryForPackage(pkg) {
   guard(pkg, 'pkg');
   var transforms = (pkg.transforms || []).map(function(tr){
-    return findTransform(tr, pkg); 
+    return findTransform(tr, pkg);
   });
-  
+
   return function(file) {
     guard(file, 'file');
     return combineStreams(transforms.map(function(transform) {

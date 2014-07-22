@@ -8,6 +8,12 @@
   },
   "author": "James Friend <james@jsdf.co> (http://jsdf.co/)",
   "license": "MIT",
+  "homepage": "https://github.com/jsdf/browserify-assets",
+  "bugs": "https://github.com/jsdf/browserify-assets/issues",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/jsdf/browserify-assets.git"
+  },
   "dependencies": {
     "browserify": "4.x",
     "through": "^2.3.4",

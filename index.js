@@ -58,6 +58,7 @@ function browserifyAssets(files, opts) {
 
         b.removeListener('cacheObjectsPackage', buildAssetsForPackage);
         b.removeListener('file', buildAssetsForFile);
+        b.emit('allBundlesComplete')
       }
     }
 

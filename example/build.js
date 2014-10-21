@@ -1,10 +1,10 @@
-var browserifyIncremental = require('../');
+var browserifyAssets = require('../');
 var fs = require('fs');
 
 var counter = 10;
 var testTimeout = 1000;
 
-var b = browserifyIncremental()
+var b = browserifyAssets({cachefile: __dirname+'/output/cache.json'})
 b.on('log', function(msg){ console.log(msg) })
 b.add(__dirname + '/test-module')
 
@@ -12,7 +12,7 @@ run() // start test
 
 function run() {
   b.bundle()
-    .on('end', next)
+    .on('finish', next)
     .on('update', function(updated) { console.log(updated) })
     .pipe(fs.createWriteStream(__dirname + '/output/bundle.js'))
 }

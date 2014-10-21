@@ -27,3 +27,5 @@ require("url")
 require("util")
 require("vm")
 require("zlib")
+
+require('other-package')

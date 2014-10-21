@@ -3,10 +3,11 @@ var path = require('path');
 var util = require('util');
 var assert = require('assert');
 
-var through = require('through');
+var through = require('through2');
 var async = require('async');
 var browserify = require('browserify');
 var concatStream = require('concat-stream');
+var xtend = require('xtend');
 var glob = require('glob');
 var combineStreams = require('stream-combiner');
 var browserifyCache = require('browserify-cache-api');
@@ -25,24 +26,18 @@ function browserifyAssets(files, opts) {
   if (!opts) {
     opts = files || {};
     files = undefined;
-    b = typeof opts.bundle === 'function' ? opts : browserify(opts);
+    b = typeof opts.bundle === 'function' ? opts : browserify(xtend(browserifyCache.args, opts));
   } else {
-    b = typeof files.bundle === 'function' ? files : browserify(files, opts);
+    b = typeof files.bundle === 'function' ? files : browserify(files, xtend(browserifyCache.args, opts));
   }
 
   browserifyCache(b, opts);
 
   // override browserify bundle() method
   var bundle = b.bundle.bind(b);
-  b.bundle = function (opts_, cb) {
+  b.bundle = function (cb) {
     // more browserify plugin boilerplate
-    if (b._pending) return bundle(opts_, cb);
-
-    if (typeof opts_ === 'function') {
-      cb = opts_;
-      opts_ = {};
-    }
-    if (!opts_) opts_ = {};
+    if (b._pending) return bundle(cb);
 
     // asset build progress
     var packagesAssetsBuilds = {};
@@ -92,23 +87,17 @@ function browserifyAssets(files, opts) {
     b.on('cacheObjectsPackage', buildAssetsForPackage);
     b.on('file', buildAssetsForFile);
 
-    var outStream = bundle(opts_, cb);
+    var outStream = bundle(cb);
 
     var start = Date.now();
     var bytes = 0;
     outStream.pipe(through(function (buf) { bytes += buf.length }));
-    outStream.on('end', end);
+    outStream.on('finish', finish);
 
-    function end () {
+    function finish () {
       // no more packages to be required
       bundleComplete = true;
       cleanupWhenAssetBundleComplete();
-
-      var delta = ((Date.now() - start) / 1000).toFixed(2);
-      b.emit('log', bytes + ' bytes written (' + delta + ' seconds)');
-      b.emit('time', Date.now() - start);
-      b.emit('bytes', bytes);
-
     }
     return outStream;
   };

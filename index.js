@@ -46,6 +46,36 @@ function browserifyAssets(files, opts) {
     // provide asset bundle stream to api consumers
     var assetStream = through();
     b.emit('assetStream', assetStream);
+    
+    b.on('cacheObjectsPackage', buildAssetsForPackage);
+    b.on('file', buildAssetsForFile);
+
+    var time = null;
+    var bytes = 0;
+    b.pipeline.get('record').on('end', function () {
+      time = Date.now();
+    });
+    
+    b.pipeline.get('wrap').push(through(write, end));
+    function write (buf, enc, next) {
+      bytes += buf.length;
+      this.push(buf);
+      next();
+    }
+    function end () {
+      var delta = Date.now() - time;
+      b.emit('time', delta);
+      b.emit('bytes', bytes);
+      b.emit('log', bytes + ' bytes written ('
+          + (delta / 1000).toFixed(2) + ' seconds)'
+      );
+
+      // no more packages to be required
+      bundleComplete = true;
+      cleanupWhenAssetBundleComplete();
+
+      this.push(null);
+    }
 
     function cleanupWhenAssetBundleComplete() {
       if (bundleComplete && areAllPackagesAssetsComplete(packagesAssetsBuilds)) {
@@ -85,22 +115,7 @@ function browserifyAssets(files, opts) {
       });
     }
 
-    b.on('cacheObjectsPackage', buildAssetsForPackage);
-    b.on('file', buildAssetsForFile);
-
-    var outStream = bundle(cb);
-
-    var start = Date.now();
-    var bytes = 0;
-    outStream.pipe(through(function (buf) { bytes += buf.length }));
-    outStream.on('finish', finish);
-
-    function finish () {
-      // no more packages to be required
-      bundleComplete = true;
-      cleanupWhenAssetBundleComplete();
-    }
-    return outStream;
+    return bundle(cb);
   };
 
   return b;

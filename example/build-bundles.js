@@ -25,16 +25,21 @@ process.on('exit', function () { console.timeEnd('total') })
 run() // start test
 
 function run() {
-  console.time('bundle')
   b.on('assetStream', function(assetStream) {
-    console.time('assetStream')
-    assetStream.pipe(fs.createWriteStream(__dirname+'/output/bundle.css'))
-    assetStream.on('end', function(){ 
-      console.timeEnd('assetStream') 
+    console.time('assets')
+    var cssFileStream = fs.createWriteStream(__dirname+'/output/bundle.css')
+    cssFileStream.on('finish', function(){ 
+      console.timeEnd('assets') 
     })
+    assetStream.pipe(cssFileStream)
   })
-  b.bundle()
-    .on('end', function(){ console.timeEnd('bundle') })
-    .pipe(fs.createWriteStream(__dirname+'/output/bundle.js'))
+
+  var bundleStream = b.bundle()
+    console.time('bundle')
+    var jsFileStream = fs.createWriteStream(__dirname+'/output/bundle.js')
+    jsFileStream.on('finish', function(){
+      console.timeEnd('bundle')
+    })
+    bundleStream.pipe(jsFileStream)
 }
 

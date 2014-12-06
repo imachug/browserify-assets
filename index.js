@@ -5,19 +5,14 @@ var assert = require('assert');
 
 var through = require('through2');
 var async = require('async');
-var browserify = require('browserify');
 var concatStream = require('concat-stream');
 var xtend = require('xtend');
 var glob = require('glob');
 var combineStreams = require('stream-combiner');
 var browserifyCache = require('browserify-cache-api');
+var mothership = require('mothership');
 
 module.exports = browserifyAssets;
-browserifyAssets.browserify = browserify;
-
-var PENDING = 'PENDING';
-var STARTED = 'STARTED';
-var COMPLETE = 'COMPLETE';
 
 function browserifyAssets(files, opts) {
   // browserify plugin boilerplate
@@ -26,9 +21,9 @@ function browserifyAssets(files, opts) {
   if (!opts) {
     opts = files || {};
     files = undefined;
-    b = typeof opts.bundle === 'function' ? opts : browserify(xtend(browserifyCache.args, opts));
+    b = typeof opts.bundle === 'function' ? opts : require('browserify')(xtend(browserifyCache.args, opts));
   } else {
-    b = typeof files.bundle === 'function' ? files : browserify(files, xtend(browserifyCache.args, opts));
+    b = typeof files.bundle === 'function' ? files : require('browserify')(files, xtend(browserifyCache.args, opts));
   }
 
   browserifyCache(b, opts);
@@ -40,29 +35,37 @@ function browserifyAssets(files, opts) {
     if (b._pending) return bundle(cb);
 
     // asset build progress
-    var packagesAssetsBuilds = {};
+    var packagesBuildingAssets = {};
+    var filesDiscoveringPackages = {};
     var bundleComplete = false;
 
     // provide asset bundle stream to api consumers
     var assetStream = through();
-    b.emit('assetStream', assetStream);
-    
-    b.on('cacheObjectsPackage', buildAssetsForPackage);
-    b.on('file', buildAssetsForFile);
+    b.emit('assetStream', assetStream, 'style');
 
+    // init metrics
     var time = null;
     var bytes = 0;
     b.pipeline.get('record').on('end', function () {
       time = Date.now();
     });
     
-    b.pipeline.get('wrap').push(through(write, end));
-    function write (buf, enc, next) {
+    // intercept deps in pipeline and add to asset build
+    b.pipeline.get('deps').push(through.obj(function(dep, enc, next) {
+      var filepath = dep && dep.file || dep.id;
+      if (filepath != null) buildAssetsForFile(filepath)
+      this.push(dep);
+      next();
+    }, function() {
+      this.push(null);
+    }));
+    
+    // produce metrics events
+    b.pipeline.get('wrap').push(through(function(buf, enc, next) {
       bytes += buf.length;
       this.push(buf);
       next();
-    }
-    function end () {
+    }, function() {
       var delta = Date.now() - time;
       b.emit('time', delta);
       b.emit('bytes', bytes);
@@ -75,42 +78,57 @@ function browserifyAssets(files, opts) {
       cleanupWhenAssetBundleComplete();
 
       this.push(null);
-    }
+    }));
 
     function cleanupWhenAssetBundleComplete() {
-      if (bundleComplete && areAllPackagesAssetsComplete(packagesAssetsBuilds)) {
+      if (
+        bundleComplete
+        && allItemsComplete(filesDiscoveringPackages)
+        && allItemsComplete(packagesBuildingAssets)
+      ) {
         assetStream.end();
 
-        b.removeListener('cacheObjectsPackage', buildAssetsForPackage);
-        b.removeListener('file', buildAssetsForFile);
         b.emit('allBundlesComplete')
       }
     }
 
     function assetComplete(err, pkgpath) {
       if (err) assetStream.emit('error', err, pkgpath);
-      packagesAssetsBuilds[pkgpath] = COMPLETE;
+      packagesBuildingAssets[pkgpath] = 'COMPLETE';
 
       cleanupWhenAssetBundleComplete();
     }
 
     function buildAssetsForFile(file) {
-      guard(file, 'file');
+      assertExists(file, 'file');
       var co = browserifyCache.getCacheObjects(b);
       var pkgpath = co.filesPackagePaths[file];
-      if (pkgpath) buildAssetsForPackage(pkgpath);
+      if (pkgpath) {
+        buildAssetsForPackage(pkgpath);
+      } else {
+        filesDiscoveringPackages[file] = 'STARTED';
+        mothership(file, function(pkg) { return true }, function (err, res) {
+          if (err) return b.emit('error', err);
+          filesDiscoveringPackages[file] = 'COMPLETE';
+          buildAssetsForPackage(res.path, res.pack);
+        });
+      }
       // else console.warn('waiting for',file)
     }
 
-    function buildAssetsForPackage(pkgpath) {
-      guard(pkgpath, 'pkgpath');
+    function buildAssetsForPackage(pkgpath, pkgLoaded) {
+      assertExists(pkgpath, 'pkgpath');
       var co = browserifyCache.getCacheObjects(b);
-      var status = packagesAssetsBuilds[pkgpath];
-      if (status && status !== PENDING) return;
+      var status = packagesBuildingAssets[pkgpath];
+      if (status && status !== 'PENDING') return;
 
-      packagesAssetsBuilds[pkgpath] = STARTED;
+      packagesBuildingAssets[pkgpath] = 'STARTED';
 
-      buildPackageAssetsAndWriteToStream(co.packages[pkgpath], assetStream, function(err) {
+      var pkg = pkgLoaded || co.packages[pkgpath];
+
+      pkg.__dirname = pkg.__dirname || path.dirname(pkgpath);
+
+      buildPackageAssetsAndWriteToStream(pkg, assetStream, function(err) {
         assetComplete(err, pkgpath);
       });
     }
@@ -124,7 +142,7 @@ function browserifyAssets(files, opts) {
 // asset building
 
 function buildPackageAssetsAndWriteToStream(pkg, assetStream, packageDone) {
-  guard(pkg, 'pkg'), guard(assetStream, 'assetStream'), guard(packageDone, 'packageDone');
+  assertExists(pkg, 'pkg'), assertExists(assetStream, 'assetStream'), assertExists(packageDone, 'packageDone');
 
   if (!pkg.__dirname) return packageDone();
 
@@ -152,19 +170,19 @@ function buildPackageAssetsAndWriteToStream(pkg, assetStream, packageDone) {
 
 function streamAccumlator(outputStream, done) {
   return concatStream(function (accumulated) {
-    outputStream.write(accumulated);
+    outputStream.write(accumulated+'\n');
     done();
   });
 }
 
 function streamFactoryForPackage(pkg) {
-  guard(pkg, 'pkg');
+  assertExists(pkg, 'pkg');
   var transforms = (pkg.transforms || []).map(function(tr){
     return findTransform(tr, pkg);
   });
 
   return function(file) {
-    guard(file, 'file');
+    assertExists(file, 'file');
     return combineStreams(transforms.map(function(transform) {
       return transform(file)
     }));
@@ -188,9 +206,9 @@ function findTransform(transform, pkg) {
   }
 }
 
-function areAllPackagesAssetsComplete(packagesAssetsBuilds) {
-  var numPending = values(packagesAssetsBuilds).filter(function(status) {
-    return status !== COMPLETE
+function allItemsComplete(itemStatuses) {
+  var numPending = values(itemStatuses).filter(function(status) {
+    return status !== 'COMPLETE'
   }).length;
   return numPending === 0;
 }
@@ -201,7 +219,7 @@ function values(obj) {
   return Object.keys(obj).map(function(key) { return obj[key]; });
 }
 
-function guard(value, name) {
+function assertExists(value, name) {
   assert(value, 'missing '+name);
 }
 

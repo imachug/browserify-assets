@@ -29,4 +29,3 @@ require("vm")
 require("zlib")
 
 require('other-package')
-require('./submodule')

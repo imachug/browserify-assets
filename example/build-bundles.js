@@ -1,3 +1,4 @@
+if (process.argv[2] == 'reset') try { require('fs').unlinkSync(__dirname+'/output/cache.json') } catch (e) {console.error(e)}
 console.time('total')
 console.time('startup')
 var browserifyAssets = require('../');

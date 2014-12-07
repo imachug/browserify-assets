@@ -92,44 +92,51 @@ function browserifyAssets(files, opts) {
       }
     }
 
-    function assetComplete(err, pkgpath) {
-      if (err) assetStream.emit('error', err, pkgpath);
-      packagesBuildingAssets[pkgpath] = 'COMPLETE';
+    function assetComplete(err, pkgdir) {
+      if (err) assetStream.emit('error', err, pkgdir);
+      packagesBuildingAssets[pkgdir] = 'COMPLETE';
 
       cleanupWhenAssetBundleComplete();
     }
 
     function buildAssetsForFile(file) {
       assertExists(file, 'file');
-      var co = browserifyCache.getCacheObjects(b);
-      var pkgpath = co.filesPackagePaths[file];
-      if (pkgpath) {
-        buildAssetsForPackage(pkgpath);
+      var cache = browserifyCache.getCacheObjects(b);
+      var pkgdir = cache.filesPackagePaths[file];
+      if (pkgdir) {
+        buildAssetsForPackage(pkgdir);
       } else {
         filesDiscoveringPackages[file] = 'STARTED';
         mothership(file, function(pkg) { return true }, function (err, res) {
           if (err) return b.emit('error', err);
           filesDiscoveringPackages[file] = 'COMPLETE';
-          buildAssetsForPackage(res.path, res.pack);
+          // update filesPackagePaths with new data
+          var cache = browserifyCache.getCacheObjects(b);
+          var pkgdir = path.dirname(res.path);
+          cache.filesPackagePaths[file] = pkgdir;
+          buildAssetsForPackage(pkgdir, res.pack);
         });
       }
       // else console.warn('waiting for',file)
     }
 
-    function buildAssetsForPackage(pkgpath, pkgLoaded) {
-      assertExists(pkgpath, 'pkgpath');
-      var co = browserifyCache.getCacheObjects(b);
-      var status = packagesBuildingAssets[pkgpath];
+    function buildAssetsForPackage(pkgdir, pkgLoaded) {
+      assertExists(pkgdir, 'pkgdir');
+      if (pkgdir.indexOf('package.json') > -1) throw new Error(pkgdir)
+      var cache = browserifyCache.getCacheObjects(b);
+      var status = packagesBuildingAssets[pkgdir];
       if (status && status !== 'PENDING') return;
 
-      packagesBuildingAssets[pkgpath] = 'STARTED';
+      packagesBuildingAssets[pkgdir] = 'STARTED';
 
-      var pkg = pkgLoaded || co.packages[pkgpath];
-
-      pkg.__dirname = pkg.__dirname || path.dirname(pkgpath);
+      var pkg = pkgLoaded || cache.packages[pkgdir] || require(path.join(pkgdir, 'package.json'));
+      assertExists(pkg, 'pkg');
+      pkg.__dirname = pkg.__dirname || pkgdir;
+      // update packages cache with new data if available
+      cache.packages[pkgdir] = pkg;
 
       buildPackageAssetsAndWriteToStream(pkg, assetStream, function(err) {
-        assetComplete(err, pkgpath);
+        assetComplete(err, pkgdir);
       });
     }
 

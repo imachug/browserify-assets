@@ -53,7 +53,10 @@ function browserifyAssets(files, opts) {
     // intercept deps in pipeline and add to asset build
     b.pipeline.get('deps').push(through.obj(function(dep, enc, next) {
       var filepath = dep && dep.file || dep.id;
-      if (filepath != null) buildAssetsForFile(filepath)
+      if (filepath != null) {
+        buildAssetsForFile(filepath)
+        b.emit('depFile', filepath)
+      }
       this.push(dep);
       next();
     }, function() {
@@ -136,7 +139,7 @@ function browserifyAssets(files, opts) {
       // update packages cache with new data if available
       cache.packages[pkgdir] = pkg;
 
-      buildPackageAssetsAndWriteToStream(pkg, assetStream, function(err) {
+      buildPackageAssetsAndWriteToStream(b, pkg, assetStream, function(err) {
         assetComplete(err, pkgdir);
       });
     }
@@ -149,7 +152,7 @@ function browserifyAssets(files, opts) {
 
 // asset building
 
-function buildPackageAssetsAndWriteToStream(pkg, assetStream, packageDone) {
+function buildPackageAssetsAndWriteToStream(b, pkg, assetStream, packageDone) {
   assertExists(pkg, 'pkg'), assertExists(assetStream, 'assetStream'), assertExists(packageDone, 'packageDone');
 
   if (!pkg.__dirname) return packageDone();
@@ -166,6 +169,8 @@ function buildPackageAssetsAndWriteToStream(pkg, assetStream, packageDone) {
       if (err) return assetGlobDone(err);
 
       async.each((assetFilePaths || []), function(assetFilePath, assetDone) {
+        b.emit('assetFile', assetFilePath)
+
         fs.createReadStream(assetFilePath, {encoding: 'utf8'})
           .on('error', assetDone)
           .pipe(transformStreamForFile(assetFilePath))

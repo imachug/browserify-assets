@@ -125,7 +125,8 @@ function browserifyAssets(files, opts) {
       if (pkgdir.indexOf('package.json') > -1) throw new Error(pkgdir)
       var cache = browserifyCache.getCacheObjects(b);
       var status = packagesBuildingAssets[pkgdir];
-      if (status && status !== 'PENDING') return;
+      if (status && status == 'STARTED') return;
+      if (status && status == 'COMPLETE') return cleanupWhenAssetBundleComplete();
 
       packagesBuildingAssets[pkgdir] = 'STARTED';
 
@@ -184,7 +185,7 @@ function streamAccumlator(outputStream, done) {
 
 function streamFactoryForPackage(pkg) {
   assertExists(pkg, 'pkg');
-  var transforms = (pkg.transforms || []).map(function(tr){
+  var transforms = (pkg.transforms || []).map(function(tr) {
     return findTransform(tr, pkg);
   });
 

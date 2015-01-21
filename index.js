@@ -11,6 +11,7 @@ var glob = require('glob');
 var combineStreams = require('stream-combiner');
 var browserifyCache = require('browserify-cache-api');
 var mothership = require('mothership');
+var resolve = require('resolve');
 
 module.exports = browserifyAssets;
 
@@ -104,14 +105,17 @@ function browserifyAssets(files, opts) {
 
     function buildAssetsForFile(filepath) {
       assertExists(filepath, 'filepath');
-      var file
+      var file;
       if (filepath.charAt(0) == '/') {
-        file = filepath
+        file = filepath;
       } else {
         try {
-          file = require.resolve(filepath)
+          file = resolve.sync(filepath, {
+            basedir: process.cwd(),
+            extensions: b._extensions || b._options && b._options.extensions || [],
+          });
         } catch (err) {
-          b.emit('error', err)
+          b.emit('error', err);
         }
       }
 

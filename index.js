@@ -102,8 +102,19 @@ function browserifyAssets(files, opts) {
       cleanupWhenAssetBundleComplete();
     }
 
-    function buildAssetsForFile(file) {
-      assertExists(file, 'file');
+    function buildAssetsForFile(filepath) {
+      assertExists(filepath, 'filepath');
+      var file
+      if (filepath.charAt(0) == '/') {
+        file = filepath
+      } else {
+        try {
+          file = require.resolve(filepath)
+        } catch (err) {
+          b.emit('error', err)
+        }
+      }
+
       // var cache = browserifyCache.getCacheObjects(b);
       // var pkgdir = cache.filesPackagePaths[file];
       // if (pkgdir) {

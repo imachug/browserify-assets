@@ -30,141 +30,144 @@ function browserifyAssets(files, opts) {
 
   browserifyCache(b, opts);
 
-  // override browserify bundle() method
-  var bundle = b.bundle.bind(b);
-  b.bundle = function (cb) {
-    // more browserify plugin boilerplate
-    if (b._pending) return bundle(cb);
-
-    // asset build progress
-    var packagesBuildingAssets = {};
-    var filesDiscoveringPackages = {};
-    var bundleComplete = false;
-
-    // provide asset bundle stream to api consumers
-    var assetStream = through();
-    b.emit('assetStream', assetStream, 'style');
-
-    // init metrics
-    var time = null;
-    var bytes = 0;
-    b.pipeline.get('record').on('end', function () {
-      time = Date.now();
-    });
-    
-    // intercept deps in pipeline and add to asset build
-    b.pipeline.get('deps').push(through.obj(function(dep, enc, next) {
-      var filepath = dep && dep.file || dep.id;
-      if (filepath != null) {
-        buildAssetsForFile(filepath)
-        b.emit('depFile', filepath)
-      }
-      this.push(dep);
-      next();
-    }, function() {
-      this.push(null);
-    }));
-    
-    // produce metrics events
-    b.pipeline.get('wrap').push(through(function(buf, enc, next) {
-      bytes += buf.length;
-      this.push(buf);
-      next();
-    }, function() {
-      var delta = Date.now() - time;
-      b.emit('time', delta);
-      b.emit('bytes', bytes);
-      b.emit('log', bytes + ' bytes written ('
-          + (delta / 1000).toFixed(2) + ' seconds)'
-      );
-
-      // no more packages to be required
-      bundleComplete = true;
-      cleanupWhenAssetBundleComplete();
-
-      this.push(null);
-    }));
-
-    function cleanupWhenAssetBundleComplete() {
-      if (
-        bundleComplete
-        && allItemsComplete(filesDiscoveringPackages)
-        && allItemsComplete(packagesBuildingAssets)
-      ) {
-        assetStream.end();
-
-        b.emit('allBundlesComplete')
-      }
-    }
-
-    function assetComplete(err, pkgdir) {
-      if (err) assetStream.emit('error', err, pkgdir);
-      packagesBuildingAssets[pkgdir] = 'COMPLETE';
-
-      cleanupWhenAssetBundleComplete();
-    }
-
-    function buildAssetsForFile(filepath) {
-      assertExists(filepath, 'filepath');
-      var file;
-      if (filepath.charAt(0) == '/') {
-        file = filepath;
-      } else {
-        try {
-          file = resolve.sync(filepath, {
-            basedir: process.cwd(),
-            extensions: b._extensions || b._options && b._options.extensions || [],
-          });
-        } catch (err) {
-          b.emit('error', err);
-        }
-      }
-
-      // var cache = browserifyCache.getCacheObjects(b);
-      // var pkgdir = cache.filesPackagePaths[file];
-      // if (pkgdir) {
-      //   buildAssetsForPackage(pkgdir);
-      // } else {
-        filesDiscoveringPackages[file] = 'STARTED';
-        mothership(file, function(pkg) { return true }, function (err, res) {
-          if (err) return b.emit('error', err);
-          filesDiscoveringPackages[file] = 'COMPLETE';
-          // // update filesPackagePaths with new data
-          // var cache = browserifyCache.getCacheObjects(b);
-          var pkgdir = path.dirname(res.path);
-          // cache.filesPackagePaths[file] = pkgdir;
-          buildAssetsForPackage(pkgdir, res.pack);
-        });
-      // }
-      // else console.warn('waiting for',file)
-    }
-
-    function buildAssetsForPackage(pkgdir, pkgLoaded) {
-      assertExists(pkgdir, 'pkgdir');
-      if (pkgdir.indexOf('package.json') > -1) throw new Error(pkgdir)
-      // var cache = browserifyCache.getCacheObjects(b);
-      var status = packagesBuildingAssets[pkgdir];
-      if (status && status == 'STARTED') return;
-      if (status && status == 'COMPLETE') return cleanupWhenAssetBundleComplete();
-
-      packagesBuildingAssets[pkgdir] = 'STARTED';
-
-      // var pkg = pkgLoaded || cache.packages[pkgdir] || require(path.join(pkgdir, 'package.json'));
-      var pkg = pkgLoaded || require(path.join(pkgdir, 'package.json'));
-      assertExists(pkg, 'pkg');
-      pkg.__dirname = pkg.__dirname || pkgdir;
-      // // update packages cache with new data if available
-      // cache.packages[pkgdir] = pkg;
-
-      buildPackageAssetsAndWriteToStream(b, pkg, assetStream, function(err) {
-        assetComplete(err, pkgdir);
-      });
-    }
-
-    return bundle(cb);
-  };
+  b.on('reset', reset);
+  reset();
+  
+  function reset() { attachAssetBundler(b); }
 
   return b;
+}
+
+function attachAssetBundler(b) {
+  // asset build progress
+  var packagesBuildingAssets = {};
+  var filesDiscoveringPackages = {};
+  var bundleComplete = false;
+
+  // create assetStream for next build
+  var assetStream = through();
+  if (b._assetsHandleBundle) b.removeListener('bundle', b._assetsHandleBundle);
+  b._assetsHandleBundle = function(bundleStream) {
+    // provide assetStream to api consumers
+    b.emit('assetStream', assetStream, 'style');
+  };
+  b.on('bundle', b._assetsHandleBundle);
+
+  // init metrics
+  var time = null;
+  var bytes = 0;
+  b.pipeline.get('record').on('end', function () {
+    time = Date.now();
+  });
+  
+  // intercept deps in pipeline and add to asset build
+  b.pipeline.get('deps').push(through.obj(function(dep, enc, next) {
+    var filepath = dep && dep.file || dep.id;
+    if (filepath != null) {
+      buildAssetsForFile(filepath)
+      b.emit('depFile', filepath)
+    }
+    this.push(dep);
+    next();
+  }, function() {
+    this.push(null);
+  }));
+  
+  // produce metrics events
+  b.pipeline.get('wrap').push(through(function(buf, enc, next) {
+    bytes += buf.length;
+    this.push(buf);
+    next();
+  }, function() {
+    var delta = Date.now() - time;
+    b.emit('time', delta);
+    b.emit('bytes', bytes);
+    b.emit('log', bytes + ' bytes written ('
+        + (delta / 1000).toFixed(2) + ' seconds)'
+    );
+
+    // no more packages to be required
+    bundleComplete = true;
+    cleanupWhenAssetBundleComplete();
+
+    this.push(null);
+  }));
+
+  function cleanupWhenAssetBundleComplete() {
+    if (
+      bundleComplete
+      && allItemsComplete(filesDiscoveringPackages)
+      && allItemsComplete(packagesBuildingAssets)
+    ) {
+      assetStream.end();
+
+      b.emit('allBundlesComplete')
+    }
+  }
+
+  function assetComplete(err, pkgdir) {
+    if (err) assetStream.emit('error', err, pkgdir);
+    packagesBuildingAssets[pkgdir] = 'COMPLETE';
+
+    cleanupWhenAssetBundleComplete();
+  }
+
+  function buildAssetsForFile(filepath) {
+    assertExists(filepath, 'filepath');
+    var file;
+    if (filepath.charAt(0) == '/') {
+      file = filepath;
+    } else {
+      try {
+        file = resolve.sync(filepath, {
+          basedir: process.cwd(),
+          extensions: b._extensions || b._options && b._options.extensions || [],
+        });
+      } catch (err) {
+        b.emit('error', err);
+      }
+    }
+
+    // var cache = browserifyCache.getCacheObjects(b);
+    // var pkgdir = cache.filesPackagePaths[file];
+    // if (pkgdir) {
+    //   buildAssetsForPackage(pkgdir);
+    // } else {
+      filesDiscoveringPackages[file] = 'STARTED';
+      mothership(file, function(pkg) { return true }, function (err, res) {
+        if (err) return b.emit('error', err);
+        filesDiscoveringPackages[file] = 'COMPLETE';
+        // // update filesPackagePaths with new data
+        // var cache = browserifyCache.getCacheObjects(b);
+        var pkgdir = path.dirname(res.path);
+        // cache.filesPackagePaths[file] = pkgdir;
+        buildAssetsForPackage(pkgdir, res.pack);
+      });
+    // }
+    // else console.warn('waiting for',file)
+  }
+
+  function buildAssetsForPackage(pkgdir, pkgLoaded) {
+    assertExists(pkgdir, 'pkgdir');
+    if (pkgdir.indexOf('package.json') > -1) throw new Error(pkgdir)
+    // var cache = browserifyCache.getCacheObjects(b);
+    var status = packagesBuildingAssets[pkgdir];
+    if (status && status == 'STARTED') return;
+    if (status && status == 'COMPLETE') return cleanupWhenAssetBundleComplete();
+
+    packagesBuildingAssets[pkgdir] = 'STARTED';
+
+    // var pkg = pkgLoaded || cache.packages[pkgdir] || require(path.join(pkgdir, 'package.json'));
+    var pkg = pkgLoaded || require(path.join(pkgdir, 'package.json'));
+    assertExists(pkg, 'pkg');
+    pkg.__dirname = pkg.__dirname || pkgdir;
+    // // update packages cache with new data if available
+    // cache.packages[pkgdir] = pkg;
+
+    buildPackageAssetsAndWriteToStream(b, pkg, assetStream, function(err) {
+      assetComplete(err, pkgdir);
+    });
+  }
 }
 
 // asset building

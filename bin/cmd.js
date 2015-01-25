@@ -1,50 +1,40 @@
 #!/usr/bin/env node
 
 var browserifyAssets = require('../');
-var through = require('through');
 var fs = require('fs');
 var path = require('path');
 var fromArgs = require('browserify/bin/args');
+var xtend = require('xtend');
 
-var b, outfile, verbose, cachefile;
+var b_ = fromArgs(process.argv.slice(2), browserifyAssets.args);
+var cachefile = b_.argv.cachefile || './browserify-cache.json';
+var bundlename = b_.argv.bundlename;
+var outfile = b_.argv.o || b_.argv.outfile || bundlename ? bundlename+'.js' : undefined;
+var cssfile = b_.argv.cssfile || bundlename ? bundlename+'.css' : undefined;
+var verbose = (b_.argv.v || b_.argv.verbose) && outfile;
+var b = browserifyAssets(b_, {cacheFile: cachefile});
 
-var b_ = fromArgs(process.argv.slice(2))
-cachefile = b_.argv.cachefile || './browserify-cache.json'
-outfile = b_.argv.o || b_.argv.outfile;
-verbose = b_.argv.v || b_.argv.verbose;
-b = browserifyAssets(b_, {cacheFile: cachefile});
-
-if (!outfile) {
-    console.error('You MUST specify an outfile with -o.');
-    process.exit(1);
-}
-
-b.on('update', function(changes) { 
-    if (verbose && changes.length) console.error('changed files:\n'+changes.join('\n'));
+b.on('assetStream', function(assetStream) {
+  if (cssfile) {
+    var cssWriteStream = fs.createWriteStream(cssfile);
+    pipeToOutputStream(assetStream, cssWriteStream, cssfile);
+  }
 });
-b.on('error', function (err) {
-    console.error(err);
-});
-bundle();
 
-function bundle () {
-    var bb = b.bundle();
-    var caught = false;
-    bb.on('error', function (err) {
-        console.error(err);
-        caught = true;
-    });
-    bb.pipe(fs.createWriteStream(outfile));
-    var bytes, time;
-    b.on('bytes', function (b) { bytes = b });
-    b.on('time', function (t) { time = t });
-    
-    bb.on('end', function () {
-        if (caught) return;
-        if (verbose) {
-            console.error(bytes + ' bytes written to ' + outfile
-                + ' (' + (time / 1000).toFixed(2) + ' seconds)'
-            );
-        }
-    });
+var jsWriteStream = outfile ? fs.createWriteStream(outfile) : process.stdout;
+pipeToOutputStream(b.bundle(), jsWriteStream, outfile);
+
+function pipeToOutputStream(readStream, writeStream, filename) {
+  var caught = false;
+  readStream.on('error', function (err) {
+    console.error('error while writing '+ (filename || 'to stdout')+'\n'+err.toString());
+    caught = true;
+  });
+  writeStream.on('finish', function () {
+    if (caught) return;
+    if (verbose && filename) {
+      console.error('finished writing '+ filename);
+    }
+  });
+  readStream.pipe(writeStream);
 }

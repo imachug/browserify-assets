@@ -13,6 +13,7 @@ var browserifyCache = require('browserify-cache-api');
 var mothership = require('mothership');
 var resolve = require('resolve');
 
+browserifyAssets.args = browserifyCache.args;
 module.exports = browserifyAssets;
 
 function browserifyAssets(files, opts) {

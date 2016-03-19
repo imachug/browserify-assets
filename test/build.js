@@ -2,6 +2,7 @@ var path = require('path')
 var test = require('tap').test
 var browserifyAssets = require('../')
 var fs = require('fs')
+var exec = require('child_process').exec;
 
 var outputDir = path.resolve(__dirname,'../example/output')
 
@@ -25,10 +26,17 @@ test("it runs twice", function (t) {
     bundleStream.pipe(jsFileStream)
   }
 
-  t.plan(4)
-  build(function(){
-    build(function(){
-      t.end()
-    })
-  })
+  t.plan(3)
+
+  exec('rm -rfv ' + outputDir, function() {
+    exec('mkdir -p ' + outputDir, function(err) {
+      t.notOk(err, 'dir created');
+
+      build(function(){
+        build(function(){
+          t.end()
+        })
+      })
+    });
+  });
 })

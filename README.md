@@ -1,5 +1,7 @@
 # browserify-assets
 
+## THIS PROJECT IS NO LONGER MAINTAINED
+
 finds and transforms the assets (currently just stylesheets) in your 
 browserify-based app
 
@@ -124,6 +126,3 @@ build(function(err) {
   }
 });
 ```
-
-:warning: this module is pretty new, please [file an issue](https://github.com/jsdf/browserify-assets/issues)
-if you encounter any problems

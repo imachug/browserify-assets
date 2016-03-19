@@ -1,9 +1,11 @@
 # browserify-assets
 
-## THIS PROJECT IS NO LONGER MAINTAINED
-
 finds and transforms the assets (currently just stylesheets) in your 
 browserify-based app
+
+## THIS PROJECT IS NO LONGER MAINTAINED
+
+:warning: If you are interested in taking over maintainership, please [file an issue](https://github.com/jsdf/browserify-assets/issues)
 
 ### example
 assuming you have a project consisiting of one or more commonjs modules (`app`) and you
